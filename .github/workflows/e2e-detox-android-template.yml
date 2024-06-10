@@ -1,0 +1,489 @@
+name: Detox E2E Tests Template
+
+on:
+  workflow_call:
+    inputs:
+      remove-pr-label:
+        description: 'Remove PR label'
+        required: false
+        type: boolean
+        default: false
+      status_check_context:
+        type: string
+        required: true
+      commit_sha:
+        type: string
+        required: true
+      run-type:
+        type: string
+        required: false
+        default: 'PR'
+      testcase_failure_fatal:
+        description: 'Should failures be considered fatal'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  AWS_REGION: 'us-east-1'
+  ADMIN_EMAIL: ${{ secrets.MM_MOBILE_E2E_ADMIN_EMAIL }}
+  ADMIN_USERNAME: ${{ secrets.MM_MOBILE_E2E_ADMIN_USERNAME }}
+  ADMIN_PASSWORD: ${{ secrets.MM_MOBILE_E2E_ADMIN_PASSWORD }}
+  BRANCH: ${{ github.head_ref || github.ref_name }} 
+  COMMIT_HASH: ${{ github.sha }}
+  DETOX_AWS_S3_BUCKET: 'mattermost-detox-report'
+  DETOX_AWS_ACCESS_KEY_ID: ${{ secrets.MM_MOBILE_DETOX_AWS_ACCESS_KEY_ID }}
+  DETOX_AWS_SECRET_ACCESS_KEY: ${{ secrets.MM_MOBILE_DETOX_AWS_SECRET_ACCESS_KEY }}
+  HEADLESS: false
+  TYPE: ${{ inputs.run-type }}
+  PULL_REQUEST: 'https://github.com/mattermost/mattermost-mobile/pull/${{ github.event.number }}'
+  SITE_1_URL: ${{ secrets.MM_MOBILE_E2E_SITE_1_URL }}
+  SITE_2_URL: ${{ secrets.MM_MOBILE_E2E_SITE_2_URL }}
+  SITE_3_URL: ${{ secrets.MM_MOBILE_E2E_SITE_3_URL }}
+  ZEPHYR_ENABLE: false
+  JIRA_PROJECT_KEY: 'MM'
+  ZEPHYR_API_KEY: ${{ secrets.MM_MOBILE_E2E_ZEPHYR_API_KEY }}
+  ZEPHYR_FOLDER_ID: '3233873'
+  TEST_CYCLE_LINK_PREFIX: ${{ secrets.MM_MOBILE_E2E_TEST_CYCLE_LINK_PREFIX }}
+  WEBHOOK_URL: ${{ secrets.MM_MOBILE_E2E_WEBHOOK_URL }}
+  FAILURE_MESSAGE: "Something has failed"
+  
+jobs:
+  update-initial-status:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: mattermost/actions/delivery/update-commit-status@main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          repository_full_name: ${{ github.repository }}
+          commit_sha: ${{ inputs.commit_sha }}
+          context: ${{ inputs.status_check_context }}
+          description: Detox tests for mattermost mobile app
+          status: pending
+
+  generate-specs:
+    needs: update-initial-status
+    runs-on: ubuntu-22.04
+    outputs:
+      specs: ${{ steps.generate-specs.outputs.specs }}
+      build_id: ${{ env.BUILD_ID }}
+      device_name: ${{ env.DEVICE_NAME }}
+      device_os_version: ${{ env.DEVICE_OS_VERSION }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Set Build ID
+        id: resolve-device
+        run: |
+          cd detox
+          DEVICE_NAME=$(node -p "require('./.detoxrc').devices['android'].device.avdName")
+          DEVICE_OS_VERSION=$(node -p "require('./.detoxrc').devices['android'].device.api")
+          BUILD_ID="${{ github.run_id }}-$DEVICE_NAME-$DEVICE_OS_VERSION"
+
+          echo "BUILD_ID=$(echo ${BUILD_ID} | sed 's/ /_/g')" >> $GITHUB_ENV
+          echo "DEVICE_NAME=$(echo ${DEVICE_NAME})" >> $GITHUB_ENV
+          echo "DEVICE_OS_VERSION=$(echo ${DEVICE_OS_VERSION})" >> $GITHUB_ENV
+
+      - name: Generate Test Specs
+        id: generate-specs
+        uses: ./.github/actions/generate-specs
+        with:
+          parallelism: 10
+          search_path: detox/e2e/test
+          device_name: ${{ env.DEVICE_NAME }}
+          device_os_version: ${{env.DEVICE_OS_VERSION}}
+        
+  # build-android-apk:
+  #   needs: update-initial-status
+  #   runs-on: macos-14-large
+  #   env:
+  #     ORG_GRADLE_PROJECT_jvmargs: -Xmx8g
+  #   steps:
+  #     - name: ci/checkout-repo
+  #       uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+  #       with:
+  #         ref: ${{ github.event.pull_request.head.sha }}
+
+  #     - name: ci/prepare-android-build
+  #       uses: ./.github/actions/prepare-android-build
+  #       env:
+  #         STORE_FILE: "${{ secrets.MM_MOBILE_STORE_FILE }}"
+  #         STORE_ALIAS: "${{ secrets.MM_MOBILE_STORE_ALIAS }}"
+  #         STORE_PASSWORD: "${{ secrets.MM_MOBILE_STORE_PASSWORD }}"
+  #         MATTERMOST_BUILD_GH_TOKEN: "${{ secrets.MATTERMOST_BUILD_GH_TOKEN }}"
+
+  #     - name: Cache Gradle dependencies
+  #       uses: actions/cache@0c45773b623bea8c8e75f6c82b208c3cf94ea4f9 # v4.0.2
+  #       with:
+  #         path: ~/.gradle/caches
+  #         key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+  #         restore-keys: |
+  #           ${{ runner.os }}-gradle-
+
+  #     - name: Install Java
+  #       uses: actions/setup-java@v4
+  #       with:
+  #         java-version: "17"
+  #         distribution: "adopt"
+  #         cache: "gradle"
+
+  #     - name: Validate Gradle wrapper
+  #       uses: gradle/actions/wrapper-validation@v3
+
+  #     - name: Detox build
+  #       run: |
+  #         cd detox
+  #         npm install
+  #         npm install -g detox-cli
+  #         npm run e2e:android-build
+
+  #     - name: ci/upload-android-pr-build
+  #       uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
+  #       with:
+  #         name: android-build-apk-${{ github.run_id }}
+  #         path: "android/app/build/outputs/apk/**/app-*.apk"
+
+  e2e-android-on-mac:
+    name: android-detox-e2e-${{ matrix.runId }}-${{ matrix.deviceName }}-${{ matrix.deviceOsVersion }}
+    continue-on-error: true
+    runs-on: macos-13
+    timeout-minutes: 35
+    needs:
+      - generate-specs
+      # - build-android-apk
+    strategy:
+      fail-fast: false
+      matrix: ${{fromJson(needs.generate-specs.outputs.specs)}}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+
+    - name: ci/prepare-node-deps
+      uses: ./.github/actions/prepare-node-deps
+
+    - name: Install Sharp CLI for faster image generation during prebuild
+      run: npm install --global sharp-cli
+
+    - name: Cache AVD snapshot
+      uses: actions/cache@v4
+      id: avd-cache
+      with:
+        path: |
+          ~/.android/avd/*
+          ~/.android/adb*
+        key: avd-33-pixel_6_pro
+
+    - name: create AVD and generate snapshot for caching
+      if: steps.avd-cache.outputs.cache-hit != 'true'
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        profile: pixel_6_pro
+        api-level: ${{ matrix.api-level }}
+        arch: x86_64
+        force-avd-creation: false
+        emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+        script: echo "Generated AVD snapshot for caching."
+
+    - name: Start React Native Metro Server
+      run: npm run start &
+
+    - name: Install Detox Dependencies
+      run: cd detox && npm i
+
+    - name: Install Java
+      uses: actions/setup-java@v4
+      with:
+        java-version: "17"
+        distribution: "adopt"
+        cache: "gradle"
+
+    - name: Create destination path
+      run: mkdir -p android/app/build/outputs/apk
+
+    - name: Download artifact
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        curl -L -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/mattermost/mattermost-mobile/actions/artifacts/1578521977/zip \
+            --output android/app/build/outputs/apk/artifact.zip
+
+    - name: Unzip artifact
+      run: unzip android/app/build/outputs/apk/artifact.zip -d android/app/build/outputs/apk
+
+    - name: Cleanup
+      run: rm android/app/build/outputs/apk/artifact.zip
+
+    - name: Run tests
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        profile: pixel_6_pro
+        api-level: 33
+        arch: x86_64
+        force-avd-creation: false
+        emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+        disable-animations: true
+        script: cd detox && npm run e2e:android-test -- ${{ matrix.specs }}
+        
+    # - name: Create AVD and generate snapshot for caching
+    #   if: steps.avd-cache.outputs.cache-hit != 'true'
+    #   uses: reactivecircus/android-emulator-runner@v2
+    #   with:
+    #     target: google_apis
+    #     api-level: 33
+    #     arch: x86
+    #     ram-size: 4096M
+    #     channel: stable
+    #     profile: pixel
+    #     avd-name: pixel_6_pro
+    #     force-avd-creation: false
+    #     emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+    #     emulator-boot-timeout: 12000
+    #     disable-animations: false
+    #     script: echo "Generated AVD snapshot for caching"
+
+    # - name: Start emulator and run Detox integration tests
+    #   uses: reactivecircus/android-emulator-runner@v2
+    #   with:
+    #     target: google_apis
+    #     api-level: 33
+    #     arch: x86
+    #     ram-size: 4096M
+    #     channel: stable
+    #     profile: pixel
+    #     avd-name: pixel_6_pro
+    #     force-avd-creation: false
+    #     emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+    #     emulator-boot-timeout: 12000
+    #     disable-animations: true
+    #     script: |
+    #       adb wait-for-device
+    #       adb shell input keyevent 82
+    #       cd detox && npm run e2e:android-test -- ${{ matrix.specs }}
+
+    # - name: Run Detox Tests
+    #   run: |
+    #     cd detox && npm run e2e:android-test -- ${{ matrix.specs }}
+
+    - name: Upload Android Test Report
+      if: always()
+      uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
+      with:
+        name: android-results-${{ matrix.runId }}
+        path: detox/artifacts
+
+  # e2e-android:
+  #   continue-on-error: true
+  #   name: android-detox-e2e-${{ matrix.runId }}-${{ matrix.deviceName }}-${{ matrix.deviceOsVersion }}
+  #   env:
+  #     IOS: false
+  #     GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4096m"
+  #     ARCH: x86_64
+  #     DEVICE_NAME: ${{ needs.generate-specs.outputs.device_name }}
+  #     DEVICE_OS_VERSION: ${{ needs.generate-specs.outputs.device_os_version }}
+  #   runs-on: ubuntu-22.04
+  #   needs:
+  #     - generate-specs
+  #     # - build-android-apk
+  #   strategy:
+  #     fail-fast: false
+  #     matrix: ${{fromJson(needs.generate-specs.outputs.specs)}}
+  #   steps:
+  #     - name: Checkout Repository
+  #       uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+  #     - name: Install Java
+  #       uses: actions/setup-java@v4
+  #       with:
+  #         java-version: "17"
+  #         distribution: "adopt"
+  #         cache: "gradle"
+
+  #     - name: Create destination path
+  #       run: mkdir -p android/app/build/outputs/apk
+
+  #     - name: Download artifact
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       run: |
+  #         curl -L -H "Authorization: token $GITHUB_TOKEN" \
+  #               -H "Accept: application/vnd.github.v3+json" \
+  #               https://api.github.com/repos/mattermost/mattermost-mobile/actions/artifacts/1578521977/zip \
+  #               --output android/app/build/outputs/apk/artifact.zip
+
+  #     - name: Unzip artifact
+  #       run: unzip android/app/build/outputs/apk/artifact.zip -d android/app/build/outputs/apk
+
+  #     - name: Cleanup
+  #       run: rm android/app/build/outputs/apk/artifact.zip
+    
+  #     - name: Enable KVM
+  #       run: |
+  #         echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+  #         sudo udevadm control --reload-rules
+  #         sudo udevadm trigger --name-match=kvm
+
+  #     - name: ci/prepare-node-deps
+  #       uses: ./.github/actions/prepare-node-deps
+
+  #     - name: Gradle cache
+  #       uses: gradle/actions/setup-gradle@v3
+
+  #     - name: Empty disk space
+  #       uses: jlumbroso/free-disk-space@main
+  #       with:
+  #         tool-cache: false
+  #         android: false
+  #         dotnet: true
+  #         haskell: true
+  #         large-packages: false
+  #         docker-images: true
+  #         swap-storage: false
+
+  #     - name: Install Android SDK
+  #       run: |
+  #         sudo apt-get update
+  #         sudo apt-get install -y openjdk-11-jdk wget unzip
+  #         mkdir -p $HOME/android-sdk/cmdline-tools/latest
+  #         wget https://dl.google.com/android/repository/commandlinetools-linux-6609375_latest.zip -O cmdline-tools.zip
+  #         unzip cmdline-tools.zip -d $HOME/android-sdk/cmdline-tools/latest
+  #         mv $HOME/android-sdk/cmdline-tools/latest/cmdline-tools/* $HOME/android-sdk/cmdline-tools/latest/
+  #         yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
+  #         $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-33" "system-images;android-33;default;x86_64" "emulator"
+  
+  #     - name: Create AVD
+  #       run: |
+  #         echo no | $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd --force -n pixel_6_pro --abi 'default/x86_64' --package 'system-images;android-33;default;x86_64'
+  #         printf 'hw.cpu.ncore=2\n' >> $HOME/.android/avd/pixel_6_pro.avd/config.ini
+
+  #     - name: Start emulator
+  #       run: |
+  #         $ANDROID_HOME/emulator/emulator -avd pixel_6_pro -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect &
+  #         adb wait-for-device
+  #         adb shell getprop sys.boot_completed
+  #         sleep 60
+  #         adb shell input keyevent 82
+
+  #     - name: Disable animations
+  #       run: |
+  #         adb shell settings put global window_animation_scale 0.0
+  #         adb shell settings put global transition_animation_scale 0.0
+  #         adb shell settings put global animator_duration_scale 0.0
+
+  #   # - name: Download Android APK
+  #     #   uses:  actions/download-artifact@c850b930e6ba138125429b7e5c93fc707a7f8427 # v4.1.4
+  #     #   with:
+  #     #     # name: android-build-apk-${{ github.run_id }}
+  #     #     name: android-build-apk-9414649994
+  #     #     path: android/app/build/outputs/apk/
+
+  #     - name: Start React Native Metro Server
+  #       run: npm run start &
+
+  #     - name: Install Detox Dependencies
+  #       run: cd detox && npm i
+
+  #     - name: Run Detox Tests
+  #       run: |
+  #         cd detox && npm run e2e:android-test -- ${{ matrix.specs }}
+
+  #     - name: Upload Android Test Report
+  #       if: always()
+  #       uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
+  #       with:
+  #         name: android-results-${{ matrix.runId }}
+  #         path: detox/artifacts
+
+  download-e2e-results:
+    runs-on: ubuntu-22.04
+    needs:
+      - generate-specs
+      - e2e-android-on-mac
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: ci/prepare-node-deps
+        uses: ./.github/actions/prepare-node-deps
+
+      - name: Create artifacts directory
+        run: mkdir -p detox/artifacts/
+
+      - name: Download All Android Artifacts
+        uses:  actions/download-artifact@c850b930e6ba138125429b7e5c93fc707a7f8427 # v4.1.4
+        with:
+          path: detox/artifacts/
+          pattern: android-results-*
+
+      - name: Save report Detox Dependencies
+        run: |
+          cd detox
+          npm ci
+          npm run e2e:save-report
+        env:
+          IOS: false
+
+  update-final-status:
+    runs-on: ubuntu-22.04
+    needs:
+      - generate-specs
+      - download-e2e-results
+    steps:
+      - name: Set Target URL
+        id: set-url
+        run: |
+          s3Folder="${{ env.BUILD_ID }}-${{ env.COMMIT_HASH }}-${{ env.BRANCH }}"
+          s3Folder=$(echo "$s3Folder" | sed 's/\./-/g')
+          echo "TARGET_URL=https://${{ env.DETOX_AWS_S3_BUCKET }}.s3.amazonaws.com/${s3Folder}/jest-stare/android-report.html" >> $GITHUB_ENV
+        env:
+          BUILD_ID: ${{ needs.generate-specs.outputs.build_id }}
+
+      - name: Determine Status
+        id: determine-status
+        run: |
+          if [[ ${{ needs.download-e2e-results.outputs.failures }} -gt 0 && "${{ inputs.testcase_failure_fatal }}" == "true" ]]; then
+            echo "status=failure" >> $GITHUB_ENV
+          else
+            echo "status=success" >> $GITHUB_ENV
+          fi
+
+      - uses: mattermost/actions/delivery/update-commit-status@main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          repository_full_name: ${{ github.repository }}
+          commit_sha: ${{ inputs.commit_sha }}
+          context: ${{ inputs.status_check_context }}
+          description: |
+            Completed with ${{ needs.download-e2e-results.outputs.failures }} failures
+          status: ${{ env.status }}
+          target_url: ${{ env.TARGET_URL }}
+
+  e2e-remove-label:
+    if: ${{ inputs.remove-pr-label }}
+    needs:
+      - download-e2e-results
+    runs-on: ubuntu-22.04
+    steps:
+      - name: e2e/remove-label-from-pr
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        continue-on-error: true # Label might have been removed manually
+        with:
+          script: |
+            const androidLabel = 'E2E Android tests for PR';
+            const labels = context.payload.pull_request.labels.map(label => label.name);
+
+            if (labels.includes(androidLabel)) {
+              github.rest.issues.removeLabel({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: androidLabel,
+              });
+            }
+        
