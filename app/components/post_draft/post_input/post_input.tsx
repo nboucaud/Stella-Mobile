@@ -223,7 +223,7 @@ export default function PostInput({
         addFiles(await extractFileInfo(files));
     }, [addFiles, intl]);
 
-    const handleHardwareEnterPress = () => {
+    const handleHardwareEnterPress = useCallback(() => {
         const topScreen = NavigationStore.getVisibleScreen();
         let sourceScreen: AvailableScreens = Screens.CHANNEL;
         if (rootId) {
@@ -234,9 +234,9 @@ export default function PostInput({
         if (topScreen === sourceScreen) {
             sendMessage();
         }
-    };
+    }, [sendMessage, rootId, isTablet]);
 
-    const handleHardwareShiftEnter = () => {
+    const handleHardwareShiftEnter = useCallback(() => {
         const topScreen = NavigationStore.getVisibleScreen();
         let sourceScreen: AvailableScreens = Screens.CHANNEL;
         if (rootId) {
@@ -254,7 +254,7 @@ export default function PostInput({
             updateCursorPosition((pos) => pos + 1);
             propagateValue(newValue!);
         }
-    };
+    }, [rootId, isTablet, updateValue, updateCursorPosition, cursorPosition, propagateValue]);
 
     const onAppStateChange = useCallback((appState: AppStateStatus) => {
         if (appState !== 'active' && previousAppState.current === 'active') {
@@ -310,10 +310,11 @@ export default function PostInput({
         }
     }, [value]);
 
-    useHardwareKeyboardEvents({
+    const events = useMemo(() => ({
         onEnterPressed: handleHardwareEnterPress,
         onShiftEnterPressed: handleHardwareShiftEnter,
-    });
+    }), [handleHardwareEnterPress, handleHardwareShiftEnter]);
+    useHardwareKeyboardEvents(events);
 
     return (
         <PasteableTextInput
@@ -337,6 +338,7 @@ export default function PostInput({
             underlineColorAndroid='transparent'
             textContentType='none'
             value={value}
+            autoCapitalize='sentences'
         />
     );
 }
