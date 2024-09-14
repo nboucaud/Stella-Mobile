@@ -62,7 +62,7 @@ export const getAdminAccount = () => {
     };
 };
 
-const SECOND = 1000;
+const SECOND = 1000 * 5; // temporary making it longer for low-bandwidth
 const MINUTE = 60 * 1000;
 
 export const timeouts = {
@@ -76,3 +76,4 @@ export const timeouts = {
     TWO_MIN: MINUTE * 2,
     FOUR_MIN: MINUTE * 4,
 };
+

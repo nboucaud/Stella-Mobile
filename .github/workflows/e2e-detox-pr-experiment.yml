@@ -1,0 +1,23 @@
+name: Detox E2E Tests PR
+
+on:
+  push:
+    branches:
+      # - test-random-github-action-experiments-disabled
+      - test-random-github-action-experiments
+
+jobs:
+
+
+  run-ios-tests-on-pr:
+    name: iOS Mobile Tests on PR
+    uses: ./.github/workflows/e2e-detox-template-experiment.yml
+    with:
+      run-ios-tests: true
+      run-type: "PR"
+      MOBILE_VERSION: ${{ github.event.pull_request.head.sha }}
+    secrets: inherit
+
+
+
+
